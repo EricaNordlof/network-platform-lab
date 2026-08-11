@@ -1,0 +1,156 @@
+services:
+  api:
+    build:
+      context: ./api
+    container_name: network-platform-api
+    environment:
+      CONFIG_ROOT: /workspace/configs/frr
+    volumes:
+      - ./configs/frr:/workspace/configs/frr:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      management:
+        ipv4_address: 172.30.0.10
+
+  edge-malmo:
+    image: quay.io/frrouting/frr:10.1.1
+    container_name: edge-malmo
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    volumes:
+      - ./configs/frr/edge-malmo:/etc/frr
+    networks:
+      management:
+        ipv4_address: 172.30.0.21
+      transit:
+        ipv4_address: 10.255.0.1
+      malmo:
+        ipv4_address: 10.10.1.1
+
+  edge-london:
+    image: quay.io/frrouting/frr:10.1.1
+    container_name: edge-london
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    volumes:
+      - ./configs/frr/edge-london:/etc/frr
+    networks:
+      management:
+        ipv4_address: 172.30.0.22
+      transit:
+        ipv4_address: 10.255.0.2
+      london:
+        ipv4_address: 10.20.1.1
+
+  app-malmo:
+    image: nginx:1.27-alpine
+    container_name: app-malmo
+    volumes:
+      - ./demo-sites/malmo:/usr/share/nginx/html:ro
+    ports:
+      - "8081:80"
+    networks:
+      malmo:
+        ipv4_address: 10.10.1.10
+
+  app-london:
+    image: nginx:1.27-alpine
+    container_name: app-london
+    volumes:
+      - ./demo-sites/london:/usr/share/nginx/html:ro
+    ports:
+      - "8082:80"
+    networks:
+      london:
+        ipv4_address: 10.20.1.10
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      management:
+        ipv4_address: 172.30.0.30
+
+  blackbox:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: blackbox-exporter
+    volumes:
+      - ./configs/blackbox/blackbox.yml:/config/blackbox.yml:ro
+    command:
+      - --config.file=/config/blackbox.yml
+    networks:
+      management:
+        ipv4_address: 172.30.0.31
+      malmo:
+        ipv4_address: 10.10.1.31
+      london:
+        ipv4_address: 10.20.1.31
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      management:
+        ipv4_address: 172.30.0.40
+
+networks:
+  management:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.254
+
+  transit:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.255.0.0/29
+          gateway: 10.255.0.6
+
+  malmo:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.1.0/24
+          gateway: 10.10.1.254
+
+  london:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.20.1.0/24
+          gateway: 10.20.1.254
